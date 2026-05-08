@@ -11,8 +11,6 @@ import type {
 
 import {
   evaluateMessageFilter,
-  extractUserIdFromResource,
-  getUser,
   graphApiRequest,
   resolveMessageByPath,
 } from "../shared/graph";
@@ -31,25 +29,35 @@ type WebhookNotification = {
   lifecycleEvent?: string;
 };
 
+type LifecycleNotification = {
+  lifecycleEvent?: string;
+  clientState?: string;
+  subscriptionId?: string;
+  tenantId?: string;
+  organizationId?: string;
+  expirationDateTime?: string;
+};
+
 export class OutlookSubscriptionNotificationTrigger implements INodeType {
   description: INodeTypeDescription = {
-    displayName: "Outlook Subscription Notification Trigger",
-    name: "outlookSubscriptionNotificationTrigger",
+    displayName: "Outlook Trigger",
+    name: "outlookSubscriptionTrigger",
     icon: "file:outlookSubscriptionNotificationTrigger.svg",
     group: ["trigger"],
     version: 1,
-    subtitle: "Outlook Notification Listener",
+    subtitle:
+      '={{$parameter["event"] === "lifecycle" ? "Trigger: Lifecycle" : "Trigger: Notification"}}',
     description:
-      "Receive Microsoft Graph Outlook change notifications via webhook. Create subscriptions using the Outlook Subscription node.",
+      "Receive Microsoft Graph Outlook notification and lifecycle webhook events.",
     defaults: {
-      name: "Outlook Subscription Notification Trigger",
+      name: "Outlook Trigger",
     },
     inputs: [],
     outputs: ["main" as NodeConnectionType],
     credentials: [
       {
-        name: "microsoftOutlookSubscriptionOAuth2Api",
-        required: true,
+        name: "microsoftOutlookOAuth2Api",
+        required: false,
       },
     ],
     webhooks: [
@@ -62,12 +70,27 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
     ],
     properties: [
       {
+        displayName: "Trigger On",
+        name: "event",
+        type: "options",
+        noDataExpression: true,
+        default: "notification",
+        options: [
+          { name: "Lifecycle", value: "lifecycle", action: "Lifecycle" },
+          {
+            name: "Notification",
+            value: "notification",
+            action: "Notification",
+          },
+        ],
+      },
+      {
         displayName: "Webhook Path",
         name: "webhookPath",
         type: "string",
         default: "outlook-subscription",
         description:
-          "URL path for this webhook. Copy the full Webhook URL from above and paste it as the notificationUrl when creating your Graph subscription.",
+          "URL path for this webhook. Use this URL as notificationUrl (Notification operation) or lifecycleNotificationUrl (Lifecycle operation) when creating subscriptions.",
       },
       {
         displayName: "Client State",
@@ -75,13 +98,16 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
         type: "string",
         default: "",
         description:
-          "If set, validates incoming notifications against this secret. Must match the value used when creating the subscription.",
+          "If set, validates incoming webhook events against this secret. Must match the value used when creating the subscription.",
       },
       {
         displayName: "Resolve Full Message",
         name: "resolveMessageData",
         type: "boolean",
         default: true,
+        displayOptions: {
+          show: { event: ["notification"] },
+        },
         description:
           "Whether to fetch the full message content for message notifications (skipped for deleted messages)",
       },
@@ -91,7 +117,7 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
         type: "filter",
         default: {},
         displayOptions: {
-          show: { resolveMessageData: [true] },
+          show: { event: ["notification"], resolveMessageData: [true] },
         },
         typeOptions: {
           filter: {
@@ -109,6 +135,9 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
         type: "collection",
         placeholder: "Add Option",
         default: {},
+        displayOptions: {
+          show: { event: ["notification"] },
+        },
         options: [
           {
             displayName: "Expand Properties",
@@ -126,14 +155,6 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
             default: "",
             placeholder: "id,subject,body,from,hasAttachments",
             description: "$select query parameter when resolving the message",
-          },
-          {
-            displayName: "Resolve User Email",
-            name: "resolveUserEmail",
-            type: "boolean",
-            default: false,
-            description:
-              "Whether to resolve the user ID from the notification to an email address",
           },
           {
             displayName: "Include Attachments",
@@ -177,10 +198,45 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
     const expectedClientState = (
       this.getNodeParameter("clientState", "") as string
     ).trim();
+    const event = this.getNodeParameter("event", "notification") as
+      | "notification"
+      | "lifecycle";
 
     const notifications = Array.isArray((req.body as IDataObject).value)
       ? ((req.body as IDataObject).value as WebhookNotification[])
       : [];
+
+    if (event === "lifecycle") {
+      const payloads: IDataObject[] = [];
+
+      for (const notification of notifications as LifecycleNotification[]) {
+        if (!notification.lifecycleEvent) {
+          continue;
+        }
+
+        if (expectedClientState) {
+          if (
+            !notification.clientState ||
+            notification.clientState !== expectedClientState
+          ) {
+            res.status(401).send("Invalid client state").end();
+            return { noWebhookResponse: true };
+          }
+        }
+
+        payloads.push({ ...notification });
+      }
+
+      if (payloads.length === 0) {
+        return { webhookResponse: "OK" };
+      }
+
+      return {
+        workflowData: payloads.map((payload) => [
+          { json: payload } as INodeExecutionData,
+        ]),
+      };
+    }
 
     const resolveMessageData = this.getNodeParameter(
       "resolveMessageData",
@@ -193,7 +249,6 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
     const options = this.getNodeParameter("options", {}) as IDataObject;
     const expandProperties = (options.expandProperties as string) || "";
     const selectFields = (options.selectFields as string) || "";
-    const resolveUserEmail = Boolean(options.resolveUserEmail);
     const includeAttachments = Boolean(options.includeAttachments);
 
     const payloads: IDataObject[] = [];
@@ -209,7 +264,6 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
         }
       }
 
-      // Skip lifecycle events — handled by the Outlook Subscription Lifecycle Trigger node
       if (notification.lifecycleEvent) {
         continue;
       }
@@ -255,14 +309,6 @@ export class OutlookSubscriptionNotificationTrigger implements INodeType {
           item.attachments = Array.isArray(attachmentsResponse.value)
             ? attachmentsResponse.value
             : [];
-        }
-
-        if (resolveUserEmail) {
-          const userId = extractUserIdFromResource(cleanResourcePath);
-          if (userId) {
-            const user = await getUser.call(this, userId, "mail,displayName");
-            item.user = user;
-          }
         }
       }
 

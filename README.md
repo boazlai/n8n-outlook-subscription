@@ -4,9 +4,9 @@ n8n community nodes for Microsoft Outlook mail automation and change notificatio
 
 ## Nodes
 
-### Outlook Subscription (action node)
+### Outlook (single node)
 
-Manage Microsoft Graph subscriptions and perform full Outlook mail operations.
+Manage Microsoft Graph subscriptions and perform full Outlook mail operations, plus receive Graph webhook events using the Trigger resource.
 
 **Subscription** resource:
 
@@ -37,59 +37,39 @@ Manage Microsoft Graph subscriptions and perform full Outlook mail operations.
 | Download  | Download an attachment as binary data |
 | List      | List all attachments on a message     |
 
-**User** resource:
+**Trigger** resource:
 
-| Operation | Description                       |
-| --------- | --------------------------------- |
-| Get       | Fetch a user profile by ID or UPN |
+| Operation    | Description                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| Notification | Receives Microsoft Graph change notifications via webhook with optional message resolve + filters |
+| Lifecycle    | Receives lifecycle notifications (e.g. `subscriptionRemoved`, `reauthorizationRequired`)          |
 
----
-
-### Outlook Subscription Notification Trigger
-
-Receives Microsoft Graph change notifications via webhook.
+Trigger capabilities:
 
 - Automatically handles Graph validation token handshakes.
-- Resolves the full message for `message` notifications (configurable).
-- Applies client-side message filters (subject, sender, custom fields).
-- Opportunistically renews the subscription on delivery.
-- Supports lifecycle notification URL for managed renewal.
-
----
-
-### Outlook Subscription Lifecycle Trigger
-
-Receives Microsoft Graph lifecycle notifications (e.g. `subscriptionRemoved`, `reauthorizationRequired`) and surfaces them as n8n items for downstream handling.
+- Optionally validates incoming webhook payloads with client state.
+- Optionally resolves full message payloads and attachments for notification events.
 
 ---
 
 ## Credentials
 
-Use the **Microsoft Outlook Subscription OAuth2 API** credential (OAuth 2.0, delegated).
+Use n8n's built-in **Microsoft Outlook OAuth2 API** credential (OAuth 2.0, delegated).
 
-Required Microsoft Graph scopes:
+This package does not ship its own Outlook credential anymore. The exact Microsoft Graph scope bundle now comes from the n8n version hosting the node.
 
-| Scope                  | Required for                      |
-| ---------------------- | --------------------------------- |
-| `openid`               | Authentication                    |
-| `offline_access`       | Token refresh                     |
-| `Mail.Read`            | Read messages, subscriptions      |
-| `Mail.ReadWrite`       | Update, delete, move, send, reply |
-| `MailboxSettings.Read` | Folder operations                 |
-| `User.Read.All`        | User Get operation                |
-
-To access a shared mailbox or another user's mailbox, the signed-in account must have the necessary Exchange Online delegate permissions.
+To access a shared mailbox for subscription creation, the signed-in account must have the necessary Exchange Online delegate permissions. Other-mailbox subscriptions use the other mailbox email plus a folder ID.
 
 ---
 
 ## Node Architecture
 
-| Use case                                    | Node to use                                                    |
-| ------------------------------------------- | -------------------------------------------------------------- |
-| n8n receives mail notifications in-workflow | `Outlook Subscription Notification Trigger`                    |
-| An external service receives notifications  | `Outlook Subscription` (create operation, supply your own URL) |
-| Perform mail operations (send, move, list…) | `Outlook Subscription`                                         |
-| Handle subscription lifecycle events        | `Outlook Subscription Lifecycle Trigger`                       |
+| Use case                                    | Configuration                                    |
+| ------------------------------------------- | ------------------------------------------------ |
+| n8n receives mail notifications in-workflow | `Resource = Trigger`, `Operation = Notification` |
+| Handle subscription lifecycle events        | `Resource = Trigger`, `Operation = Lifecycle`    |
+| An external service receives notifications  | `Resource = Subscription`, `Operation = Create`  |
+| Perform mail operations (send, move, list…) | `Resource = Message/Attachment`                  |
 
 ---
 

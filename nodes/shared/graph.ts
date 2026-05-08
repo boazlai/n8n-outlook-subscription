@@ -50,11 +50,12 @@ export interface GraphSubscription extends IDataObject {
 }
 
 export interface MailboxConfig {
-  mailboxMode: "current" | "other";
-  otherMailboxEmail?: string;
+  mailboxMode: "current";
 }
 
-export interface SubscriptionTargetConfig extends MailboxConfig {
+export interface SubscriptionTargetConfig {
+  mailboxMode: "current" | "other";
+  otherMailboxEmail?: string;
   entity: "message" | "folder";
   folderId?: string;
   includeSubfolders?: boolean;
@@ -86,9 +87,7 @@ export async function graphApiRequest(
   qs?: IDataObject,
   headers?: IDataObject,
 ): Promise<any> {
-  const credentials = await this.getCredentials(
-    "microsoftOutlookSubscriptionOAuth2Api",
-  );
+  const credentials = await this.getCredentials("microsoftOutlookOAuth2Api");
   const baseUrl = String(
     credentials.graphApiBaseUrl || "https://graph.microsoft.com",
   );
@@ -115,7 +114,7 @@ export async function graphApiRequest(
   try {
     return await this.helpers.httpRequestWithAuthentication.call(
       this,
-      "microsoftOutlookSubscriptionOAuth2Api",
+      "microsoftOutlookOAuth2Api",
       options,
     );
   } catch (error) {
@@ -123,17 +122,7 @@ export async function graphApiRequest(
   }
 }
 
-export function getMailboxBasePath(config: MailboxConfig): string {
-  if (config.mailboxMode === "other") {
-    if (!config.otherMailboxEmail) {
-      throw new Error(
-        "Other mailbox email is required when mailbox mode is set to other",
-      );
-    }
-
-    return `/users/${encodeURIComponent(config.otherMailboxEmail)}`;
-  }
-
+export function getMailboxBasePath(_config: MailboxConfig): string {
   return "/me";
 }
 
@@ -283,12 +272,7 @@ export function flattenFolders(folders: GraphMailFolder[]): GraphMailFolder[] {
 export async function loadFolderOptions(
   this: ILoadOptionsFunctions,
 ): Promise<INodePropertyOptions[]> {
-  const mailboxMode = (this.getCurrentNodeParameter("mailboxMode") ||
-    "current") as "current" | "other";
-  const otherMailboxEmail = (this.getCurrentNodeParameter(
-    "otherMailboxEmail",
-  ) || "") as string;
-  const config: MailboxConfig = { mailboxMode, otherMailboxEmail };
+  const config: MailboxConfig = { mailboxMode: "current" };
   const folders = flattenFolders(await getFolderTree.call(this, config));
 
   return folders.map((folder) => ({
@@ -297,11 +281,48 @@ export async function loadFolderOptions(
   }));
 }
 
+function buildOtherMailboxSubscriptionTarget(
+  otherMailboxEmail: string,
+  rawFolderId: string,
+  entity: SubscriptionTargetConfig["entity"],
+): string {
+  const trimmedMailboxEmail = otherMailboxEmail.trim();
+  const trimmedFolderId = rawFolderId.trim();
+
+  if (!trimmedMailboxEmail) {
+    throw new Error(
+      "Other mailbox email is required when mailbox is set to other",
+    );
+  }
+
+  if (!trimmedFolderId) {
+    throw new Error("Folder ID is required when mailbox is set to other");
+  }
+
+  const folderPath = `/users/${encodeURIComponent(trimmedMailboxEmail)}/mailFolders/${encodeURIComponent(trimmedFolderId)}`;
+
+  if (entity === "message") {
+    return `${folderPath}/messages`;
+  }
+
+  return folderPath;
+}
+
 export async function buildSubscriptionTargets(
   this: NodeContext,
   config: SubscriptionTargetConfig,
 ): Promise<string[]> {
-  const mailboxBase = getMailboxBasePath(config);
+  if (config.mailboxMode === "other") {
+    return [
+      buildOtherMailboxSubscriptionTarget(
+        config.otherMailboxEmail || "",
+        config.folderId || "",
+        config.entity,
+      ),
+    ];
+  }
+
+  const mailboxBase = getMailboxBasePath({ mailboxMode: "current" });
   const selectedFolderId = config.folderId?.trim();
 
   if (!selectedFolderId) {
@@ -476,22 +497,6 @@ export async function getAttachment(
   );
 }
 
-export async function getUser(
-  this: NodeContext,
-  userId: string,
-  select?: string,
-): Promise<IDataObject> {
-  const qs: IDataObject = {};
-  if (select) qs.$select = select;
-  return await graphApiRequest.call(
-    this,
-    "GET",
-    `/v1.0/users/${encodeURIComponent(userId)}`,
-    undefined,
-    Object.keys(qs).length > 0 ? qs : undefined,
-  );
-}
-
 export async function resolveMessageByPath(
   this: NodeContext,
   resourcePath: string,
@@ -507,13 +512,6 @@ export async function resolveMessageByPath(
     undefined,
     qs,
   );
-}
-
-export function extractUserIdFromResource(
-  resource: string,
-): string | undefined {
-  const match = resource.match(/^Users\/([^/]+)/i);
-  return match ? match[1] : undefined;
 }
 
 // ── New Tier-1 Message Helpers ─────────────────────────────────────────────

@@ -1,8 +1,8 @@
 {
-  "node": "n8n-nodes-outlook-subscription.outlookSubscriptionNotificationTrigger",
+  "node": "n8n-nodes-outlook-subscription.outlookSubscriptionTrigger",
   "nodeVersion": "1.0",
   "codexVersion": "1.0",
-  "categories": ["Communication", "Triggers"],
+  "categories": ["Communication"],
   "resources": {
     "primaryDocumentation": [
       {

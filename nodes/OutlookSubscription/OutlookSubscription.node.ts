@@ -23,7 +23,6 @@ import {
   findDuplicateSubscriptions,
   getAttachment,
   getMessage,
-  getUser,
   listMessageAttachments,
   listMessages,
   listSubscriptions,
@@ -45,7 +44,7 @@ export class OutlookSubscription implements INodeType {
     version: 1,
     subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
     description:
-      "Manage Microsoft Graph Outlook subscriptions, messages, attachments, and users",
+      "Manage Microsoft Graph Outlook subscriptions, messages, and attachments",
     defaults: {
       name: "Outlook",
     },
@@ -53,8 +52,8 @@ export class OutlookSubscription implements INodeType {
     outputs: ["main" as NodeConnectionType],
     credentials: [
       {
-        name: "microsoftOutlookSubscriptionOAuth2Api",
-        required: true,
+        name: "microsoftOutlookOAuth2Api",
+        required: false,
       },
     ],
     properties: [
@@ -69,7 +68,6 @@ export class OutlookSubscription implements INodeType {
           { name: "Attachment", value: "attachment" },
           { name: "Message", value: "message" },
           { name: "Subscription", value: "subscription" },
-          { name: "User", value: "user" },
         ],
       },
 
@@ -118,28 +116,7 @@ export class OutlookSubscription implements INodeType {
           { name: "List", value: "list" },
         ],
       },
-      {
-        displayName: "Operation",
-        name: "operation",
-        type: "options",
-        noDataExpression: true,
-        default: "get",
-        displayOptions: { show: { resource: ["user"] } },
-        options: [{ name: "Get", value: "get" }],
-      },
-
-      // ── Mailbox (subscription create / message / attachment) ──
-      {
-        displayName: "Mailbox",
-        name: "mailboxMode",
-        type: "options",
-        default: "current",
-        displayOptions: { show: { resource: ["message", "attachment"] } },
-        options: [
-          { name: "Current Mailbox", value: "current" },
-          { name: "Other Mailbox", value: "other" },
-        ],
-      },
+      // ── Mailbox (subscription create only) ──
       {
         displayName: "Mailbox",
         name: "mailboxMode",
@@ -158,16 +135,7 @@ export class OutlookSubscription implements INodeType {
         name: "otherMailboxEmail",
         type: "string",
         default: "",
-        displayOptions: {
-          show: { resource: ["message", "attachment"], mailboxMode: ["other"] },
-        },
-        placeholder: "shared@example.com",
-      },
-      {
-        displayName: "Other Mailbox Email",
-        name: "otherMailboxEmail",
-        type: "string",
-        default: "",
+        required: true,
         displayOptions: {
           show: {
             resource: ["subscription"],
@@ -193,19 +161,6 @@ export class OutlookSubscription implements INodeType {
         ],
       },
       {
-        displayName: "Folder Source",
-        name: "folderSource",
-        type: "options",
-        default: "list",
-        displayOptions: {
-          show: { resource: ["subscription"], operation: ["create"] },
-        },
-        options: [
-          { name: "Folder Dropdown", value: "list" },
-          { name: "Manual Folder ID", value: "manual" },
-        ],
-      },
-      {
         displayName: "Folder",
         name: "folderId",
         type: "options",
@@ -217,25 +172,28 @@ export class OutlookSubscription implements INodeType {
           show: {
             resource: ["subscription"],
             operation: ["create"],
-            folderSource: ["list"],
+            mailboxMode: ["current"],
           },
         },
         description:
-          "Optional folder selection. Leave empty to target the whole mailbox root for the chosen entity",
+          "Optional folder selection from the signed-in mailbox. Leave empty to target the whole mailbox root for the chosen entity",
       },
       {
-        displayName: "Manual Folder ID",
-        name: "folderIdManual",
+        displayName: "Folder ID",
+        name: "otherMailboxFolderId",
         type: "string",
         default: "",
+        required: true,
         displayOptions: {
           show: {
             resource: ["subscription"],
             operation: ["create"],
-            folderSource: ["manual"],
+            mailboxMode: ["other"],
           },
         },
         placeholder: "AAMkAG...=",
+        description:
+          "Folder ID from the other mailbox. This is combined with the other mailbox email to build the Microsoft Graph subscription target.",
       },
       {
         displayName: "Subscribe Subfolders",
@@ -243,7 +201,11 @@ export class OutlookSubscription implements INodeType {
         type: "boolean",
         default: false,
         displayOptions: {
-          show: { resource: ["subscription"], operation: ["create"] },
+          show: {
+            resource: ["subscription"],
+            operation: ["create"],
+            mailboxMode: ["current"],
+          },
         },
         description:
           "Whether to expand the selected folder into one subscription per descendant folder",
@@ -869,50 +831,6 @@ export class OutlookSubscription implements INodeType {
           { name: "Plain Text", value: "text" },
         ],
       },
-
-      // ── User Get ──
-      {
-        displayName: "User ID",
-        name: "userId",
-        type: "string",
-        default: "",
-        required: true,
-        displayOptions: {
-          show: { resource: ["user"], operation: ["get"] },
-        },
-        placeholder: "14e15f65-0b6d-40f8-94e0-89efb0c19654",
-        description: "User ID or User Principal Name (UPN)",
-      },
-      {
-        displayName: "Select Fields",
-        name: "userSelectFields",
-        type: "multiOptions",
-        default: [],
-        displayOptions: {
-          show: { resource: ["user"], operation: ["get"] },
-        },
-        options: [
-          { name: "Account Enabled", value: "accountEnabled" },
-          { name: "Business Phones", value: "businessPhones" },
-          { name: "City", value: "city" },
-          { name: "Company Name", value: "companyName" },
-          { name: "Country", value: "country" },
-          { name: "Department", value: "department" },
-          { name: "Display Name", value: "displayName" },
-          { name: "Given Name", value: "givenName" },
-          { name: "ID", value: "id" },
-          { name: "Job Title", value: "jobTitle" },
-          { name: "Mail", value: "mail" },
-          { name: "Mail Nickname", value: "mailNickname" },
-          { name: "Mobile Phone", value: "mobilePhone" },
-          { name: "Office Location", value: "officeLocation" },
-          { name: "Preferred Language", value: "preferredLanguage" },
-          { name: "Surname", value: "surname" },
-          { name: "User Principal Name", value: "userPrincipalName" },
-        ],
-        description:
-          "Fields to return. Leave empty to return all fields. In expression mode, enter field names separated by commas.",
-      },
     ],
   };
 
@@ -999,26 +917,23 @@ export class OutlookSubscription implements INodeType {
           const entity = this.getNodeParameter("entity", itemIndex) as
             | "message"
             | "folder";
-          const folderSource = this.getNodeParameter(
-            "folderSource",
-            itemIndex,
-          ) as "list" | "manual";
-          const folderIdList = this.getNodeParameter(
+          const folderId = this.getNodeParameter(
             "folderId",
             itemIndex,
             "",
           ) as string;
-          const folderIdManual = this.getNodeParameter(
-            "folderIdManual",
+          const otherMailboxFolderId = this.getNodeParameter(
+            "otherMailboxFolderId",
             itemIndex,
             "",
           ) as string;
-          const folderId =
-            folderSource === "manual" ? folderIdManual : folderIdList;
-          const includeSubfolders = this.getNodeParameter(
-            "includeSubfolders",
-            itemIndex,
-          ) as boolean;
+          const includeSubfolders =
+            mailboxMode === "current"
+              ? ((this.getNodeParameter(
+                  "includeSubfolders",
+                  itemIndex,
+                ) as boolean) ?? false)
+              : false;
           const notificationUrl = this.getNodeParameter(
             "notificationUrl",
             itemIndex,
@@ -1048,7 +963,7 @@ export class OutlookSubscription implements INodeType {
             mailboxMode,
             otherMailboxEmail,
             entity,
-            folderId,
+            folderId: mailboxMode === "other" ? otherMailboxFolderId : folderId,
             includeSubfolders,
           });
 
@@ -1108,16 +1023,7 @@ export class OutlookSubscription implements INodeType {
 
         // ── MESSAGE ──
         if (resource === "message") {
-          const mailboxMode = this.getNodeParameter(
-            "mailboxMode",
-            itemIndex,
-          ) as "current" | "other";
-          const otherMailboxEmail = this.getNodeParameter(
-            "otherMailboxEmail",
-            itemIndex,
-            "",
-          ) as string;
-          const config = { mailboxMode, otherMailboxEmail };
+          const config = { mailboxMode: "current" as const };
 
           // ── list ──
           if (operation === "list") {
@@ -1457,20 +1363,11 @@ export class OutlookSubscription implements INodeType {
 
         // ── ATTACHMENT ──
         if (resource === "attachment") {
-          const mailboxMode = this.getNodeParameter(
-            "mailboxMode",
-            itemIndex,
-          ) as "current" | "other";
-          const otherMailboxEmail = this.getNodeParameter(
-            "otherMailboxEmail",
-            itemIndex,
-            "",
-          ) as string;
           const messageId = this.getNodeParameter(
             "messageId",
             itemIndex,
           ) as string;
-          const config = { mailboxMode, otherMailboxEmail };
+          const config = { mailboxMode: "current" as const };
 
           if (operation === "list") {
             const attachments = await listMessageAttachments.call(
@@ -1513,32 +1410,6 @@ export class OutlookSubscription implements INodeType {
                 ),
               },
             });
-            continue;
-          }
-        }
-
-        // ── USER ──
-        if (resource === "user") {
-          if (operation === "get") {
-            const userId = this.getNodeParameter("userId", itemIndex) as string;
-            const userSelectRaw = this.getNodeParameter(
-              "userSelectFields",
-              itemIndex,
-              [],
-            );
-            const userSelectFields = Array.isArray(userSelectRaw)
-              ? (userSelectRaw as string[]).join(",")
-              : (userSelectRaw as string)
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-                  .join(",");
-            const user = await getUser.call(
-              this,
-              userId,
-              userSelectFields || undefined,
-            );
-            returnData.push({ json: user });
             continue;
           }
         }

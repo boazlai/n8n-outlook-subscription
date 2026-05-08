@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-outlook-subscription",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "n8n community nodes for Microsoft Outlook mail and folder subscriptions via Microsoft Graph",
   "license": "MIT",
   "homepage": "https://github.com/boaz-lai/n8n-nodes-outlook-subscription",
@@ -22,8 +22,8 @@
   ],
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && find nodes -name '*.svg' | while read f; do dir=dist/$(dirname $f); mkdir -p $dir; cp $f $dir/; done",
-    "dev": "tsc -p tsconfig.json --watch",
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch --preserveWatchOutput",
     "dev:docker": "node scripts/watch-and-restart.mjs",
     "docker:restart": "docker compose -f ../n8n/docker-compose.wsl.yml restart n8n",
     "lint": "tsc -p tsconfig.json --noEmit",
@@ -31,13 +31,9 @@
   },
   "n8n": {
     "n8nNodesApiVersion": 1,
-    "credentials": [
-      "dist/credentials/MicrosoftOutlookSubscriptionOAuth2Api.credentials.js"
-    ],
     "nodes": [
       "dist/nodes/OutlookSubscription/OutlookSubscription.node.js",
-      "dist/nodes/OutlookSubscriptionNotificationTrigger/OutlookSubscriptionNotificationTrigger.node.js",
-      "dist/nodes/OutlookSubscriptionLifecycleTrigger/OutlookSubscriptionLifecycleTrigger.node.js"
+      "dist/nodes/OutlookSubscriptionNotificationTrigger/OutlookSubscriptionNotificationTrigger.node.js"
     ]
   },
   "devDependencies": {
