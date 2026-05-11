@@ -16,6 +16,7 @@ import {
   buildExpirationDateTime,
   buildSubscriptionTargets,
   clampLifetimeMinutes,
+  convertBodyToMarkdown,
   createMailFolder,
   createSubscription,
   deleteMessage,
@@ -156,9 +157,21 @@ export class OutlookSubscription implements INodeType {
           show: { resource: ["subscription"], operation: ["create"] },
         },
         options: [
-          { name: "Message", value: "message" },
-          { name: "Folder", value: "folder" },
+          {
+            name: "Message",
+            value: "message",
+            description:
+              "Subscribe to individual emails inside a folder. Notifications fire when messages are created, updated, or deleted. This is the most common choice.",
+          },
+          {
+            name: "Folder",
+            value: "folder",
+            description:
+              "Subscribe to the mail folder itself. Notifications fire when the folder properties change (e.g. renamed). Only the 'Updated' change type is supported — emails inside the folder do not trigger notifications.",
+          },
         ],
+        description:
+          "What to watch: individual messages inside a folder, or the folder container itself",
       },
       {
         displayName: "Folder",
@@ -216,13 +229,35 @@ export class OutlookSubscription implements INodeType {
         type: "multiOptions",
         default: ["created", "updated"],
         displayOptions: {
-          show: { resource: ["subscription"], operation: ["create"] },
+          show: {
+            resource: ["subscription"],
+            operation: ["create"],
+            entity: ["message"],
+          },
         },
         options: [
           { name: "Created", value: "created" },
           { name: "Updated", value: "updated" },
           { name: "Deleted", value: "deleted" },
         ],
+        description:
+          "Events to subscribe to. Message subscriptions support created, updated, and deleted.",
+      },
+      {
+        displayName: "Change Types",
+        name: "changeTypes",
+        type: "multiOptions",
+        default: ["updated"],
+        displayOptions: {
+          show: {
+            resource: ["subscription"],
+            operation: ["create"],
+            entity: ["folder"],
+          },
+        },
+        options: [{ name: "Updated", value: "updated" }],
+        description:
+          "Events to subscribe to. Folder subscriptions only support updated — Microsoft Graph does not allow created or deleted for mailFolder resources.",
       },
       {
         displayName: "Notification URL",
@@ -247,21 +282,6 @@ export class OutlookSubscription implements INodeType {
         },
         description:
           "Optional shared secret used later to verify notifications",
-      },
-      {
-        displayName: "Lifetime Minutes",
-        name: "lifetimeMinutes",
-        type: "number",
-        default: 4230,
-        typeOptions: {
-          minValue: 45,
-        },
-        displayOptions: {
-          show: {
-            resource: ["subscription"],
-            operation: ["create", "renew"],
-          },
-        },
       },
       {
         displayName: "Auto Renew",
@@ -290,6 +310,21 @@ export class OutlookSubscription implements INodeType {
       },
 
       // ── Subscription Delete / Renew ──
+      {
+        displayName: "Lifetime Minutes",
+        name: "lifetimeMinutes",
+        type: "number",
+        default: 4230,
+        typeOptions: {
+          minValue: 45,
+        },
+        displayOptions: {
+          show: {
+            resource: ["subscription"],
+            operation: ["create", "renew"],
+          },
+        },
+      },
       {
         displayName: "Subscription ID",
         name: "subscriptionId",
@@ -401,6 +436,17 @@ export class OutlookSubscription implements INodeType {
         ],
         description:
           "Fields to return. Leave empty to return all fields. In expression mode, enter field names separated by commas.",
+      },
+      {
+        displayName: "Convert Body to Markdown",
+        name: "bodyToMarkdown",
+        type: "boolean",
+        default: false,
+        displayOptions: {
+          show: { resource: ["message"], operation: ["get"] },
+        },
+        description:
+          "Whether to convert the HTML body content to Markdown. Only applied when the body field is returned and its contentType is html.",
       },
 
       // ── Message Update: Fields ──
@@ -831,6 +877,75 @@ export class OutlookSubscription implements INodeType {
           { name: "Plain Text", value: "text" },
         ],
       },
+      {
+        displayName: "Add Attachment",
+        name: "replyAddAttachment",
+        type: "boolean",
+        default: false,
+        displayOptions: {
+          show: { resource: ["message"], operation: ["reply", "replyAll"] },
+        },
+        description:
+          "Whether to attach a binary file from the incoming item to the reply",
+      },
+      {
+        displayName: "Binary Field Name",
+        name: "replyBinaryFieldName",
+        type: "string",
+        default: "data",
+        displayOptions: {
+          show: {
+            resource: ["message"],
+            operation: ["reply", "replyAll"],
+            replyAddAttachment: [true],
+          },
+        },
+        placeholder: "data",
+        description:
+          "Name of the binary property on the incoming item that holds the file to attach",
+      },
+      {
+        displayName: "Inline Images",
+        name: "replyInlineImages",
+        type: "fixedCollection",
+        typeOptions: { multipleValues: true },
+        default: {},
+        displayOptions: {
+          show: {
+            resource: ["message"],
+            operation: ["reply", "replyAll"],
+            replyBodyType: ["html"],
+          },
+        },
+        description:
+          'Embed images inline in the HTML reply body. Reference each image in the body as &lt;img src="cid:your-content-id" &gt;.',
+        options: [
+          {
+            displayName: "Image",
+            name: "image",
+            values: [
+              {
+                displayName: "Binary Field Name",
+                name: "binaryFieldName",
+                type: "string",
+                default: "data",
+                placeholder: "data",
+                description:
+                  "Name of the binary property on the incoming item that holds the image file",
+              },
+              {
+                displayName: "Content ID",
+                name: "contentId",
+                type: "string",
+                default: "",
+                placeholder: "logo",
+                description:
+                  'Unique identifier for this image. Use it in the HTML body as &lt;img src="cid:logo"&gt;',
+              },
+            ],
+          },
+        ],
+      },
     ],
   };
 
@@ -943,7 +1058,7 @@ export class OutlookSubscription implements INodeType {
             itemIndex,
           ) as string[];
           const changeType = normalizeChangeTypes(changeTypes);
-          const lifetimeMinutes = clampLifetimeMinutes(
+          const lifetimeMinutesCreate = clampLifetimeMinutes(
             this.getNodeParameter("lifetimeMinutes", itemIndex) as number,
           );
           const autoRenew = this.getNodeParameter(
@@ -987,7 +1102,7 @@ export class OutlookSubscription implements INodeType {
                   notificationUrl,
                   existing: duplicates,
                   autoRenew,
-                  lifetimeMinutes,
+                  lifetimeMinutes: lifetimeMinutesCreate,
                 },
               });
               continue;
@@ -997,7 +1112,9 @@ export class OutlookSubscription implements INodeType {
               changeType,
               notificationUrl,
               clientState,
-              expirationDateTime: buildExpirationDateTime(lifetimeMinutes),
+              expirationDateTime: buildExpirationDateTime(
+                lifetimeMinutesCreate,
+              ),
               resource: target,
               latestSupportedTlsVersion: "v1_2",
               ...(autoRenew && lifecycleNotificationUrl
@@ -1013,7 +1130,7 @@ export class OutlookSubscription implements INodeType {
                 changeType,
                 notificationUrl,
                 autoRenew,
-                lifetimeMinutes,
+                lifetimeMinutes: lifetimeMinutesCreate,
                 subscription: created,
               },
             });
@@ -1255,6 +1372,73 @@ export class OutlookSubscription implements INodeType {
               itemIndex,
               "html",
             ) as "html" | "text";
+            const replyAddAttachment = this.getNodeParameter(
+              "replyAddAttachment",
+              itemIndex,
+              false,
+            ) as boolean;
+
+            const replyAttachments: Array<{
+              name: string;
+              contentType: string;
+              contentBytes: string;
+            }> = [];
+
+            if (replyAddAttachment) {
+              const replyBinaryFieldName = (
+                this.getNodeParameter(
+                  "replyBinaryFieldName",
+                  itemIndex,
+                  "data",
+                ) as string
+              ).trim();
+              const binaryData = this.helpers.assertBinaryData(
+                itemIndex,
+                replyBinaryFieldName,
+              );
+              const buffer = await this.helpers.getBinaryDataBuffer(
+                itemIndex,
+                replyBinaryFieldName,
+              );
+              replyAttachments.push({
+                name: binaryData.fileName || replyBinaryFieldName,
+                contentType: binaryData.mimeType || "application/octet-stream",
+                contentBytes: buffer.toString("base64"),
+              });
+            }
+
+            const replyInlineImagesCollection = this.getNodeParameter(
+              "replyInlineImages",
+              itemIndex,
+              {},
+            ) as {
+              image?: Array<{ binaryFieldName: string; contentId: string }>;
+            };
+            const replyInlineImageEntries =
+              replyInlineImagesCollection.image ?? [];
+            const replyInlineImages: Array<{
+              name: string;
+              contentType: string;
+              contentBytes: string;
+              contentId: string;
+            }> = [];
+            for (const entry of replyInlineImageEntries) {
+              const imgField = entry.binaryFieldName.trim() || "data";
+              const imgBinary = this.helpers.assertBinaryData(
+                itemIndex,
+                imgField,
+              );
+              const imgBuffer = await this.helpers.getBinaryDataBuffer(
+                itemIndex,
+                imgField,
+              );
+              replyInlineImages.push({
+                name: imgBinary.fileName || imgField,
+                contentType: imgBinary.mimeType || "application/octet-stream",
+                contentBytes: imgBuffer.toString("base64"),
+                contentId: entry.contentId.trim() || imgField,
+              });
+            }
 
             await replyToMessage.call(
               this,
@@ -1263,6 +1447,8 @@ export class OutlookSubscription implements INodeType {
               replyComment,
               replyBodyType,
               operation === "replyAll",
+              replyAttachments.length > 0 ? replyAttachments : undefined,
+              replyInlineImages.length > 0 ? replyInlineImages : undefined,
             );
             returnData.push({
               json: { success: true, operation, messageId },
@@ -1294,7 +1480,14 @@ export class OutlookSubscription implements INodeType {
               messageId,
               Object.keys(qs).length > 0 ? qs : undefined,
             );
-            returnData.push({ json: message });
+            const bodyToMarkdown = this.getNodeParameter(
+              "bodyToMarkdown",
+              itemIndex,
+              false,
+            ) as boolean;
+            returnData.push({
+              json: bodyToMarkdown ? convertBodyToMarkdown(message) : message,
+            });
             continue;
           }
 

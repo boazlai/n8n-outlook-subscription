@@ -10,9 +10,31 @@ import type {
   JsonObject,
 } from "n8n-workflow";
 import { NodeApiError, executeFilter } from "n8n-workflow";
+import TurndownService from "turndown";
 
 export const GRAPH_SUBSCRIPTION_MINUTES_MIN = 45;
 export const GRAPH_SUBSCRIPTION_MINUTES_MAX = 10080;
+
+const turndown = new TurndownService({
+  headingStyle: "atx",
+  codeBlockStyle: "fenced",
+});
+
+export function convertBodyToMarkdown(message: IDataObject): IDataObject {
+  const body = message.body as IDataObject | undefined;
+  if (!body) return message;
+  const contentType = (body.contentType as string | undefined)?.toLowerCase();
+  if (contentType !== "html") return message;
+  const html = (body.content as string) || "";
+  return {
+    ...message,
+    body: {
+      ...body,
+      contentType: "markdown",
+      content: turndown.turndown(html),
+    },
+  };
+}
 
 export type NodeContext =
   | IExecuteFunctions
@@ -698,18 +720,55 @@ export async function replyToMessage(
   comment: string,
   bodyType: "html" | "text",
   replyAll: boolean,
+  attachments?: Array<{
+    name: string;
+    contentType: string;
+    contentBytes: string;
+  }>,
+  inlineImages?: Array<{
+    name: string;
+    contentType: string;
+    contentBytes: string;
+    contentId: string;
+  }>,
 ): Promise<void> {
   const mailboxBase = getMailboxBasePath(config);
   const action = replyAll ? "replyAll" : "reply";
 
-  const requestBody: IDataObject =
-    bodyType === "html"
-      ? {
-          message: {
-            body: { contentType: "HTML", content: comment },
-          },
-        }
-      : { comment };
+  const allAttachments: IDataObject[] = [];
+  if (attachments && attachments.length > 0) {
+    allAttachments.push(
+      ...attachments.map((a) => ({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        name: a.name,
+        contentType: a.contentType,
+        contentBytes: a.contentBytes,
+      })),
+    );
+  }
+  if (inlineImages && inlineImages.length > 0) {
+    allAttachments.push(
+      ...inlineImages.map((img) => ({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        name: img.name,
+        contentType: img.contentType,
+        contentBytes: img.contentBytes,
+        contentId: img.contentId,
+        isInline: true,
+      })),
+    );
+  }
+
+  // Always use message format (required to support attachments)
+  const messageOverride: IDataObject = {
+    body: {
+      contentType: bodyType === "html" ? "HTML" : "Text",
+      content: comment,
+    },
+    ...(allAttachments.length > 0 ? { attachments: allAttachments } : {}),
+  };
+
+  const requestBody: IDataObject = { message: messageOverride };
 
   await graphApiRequest.call(
     this,
